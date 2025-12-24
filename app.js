@@ -4,7 +4,7 @@ const express = require('express');
 const { Telegraf, Markup } = require('telegraf');
 const app = express();
 const axios = require('axios');
-const { buildPayload, headers, API_URL } = require('./api-cekpayment-orkut');
+const { makePayment, createImageQR, cekPayment } = require('./pakasir');
 const { isUserReseller, addReseller, removeReseller, listResellersSync } = require('./modules/reseller');
 const winston = require('winston');
 const logger = winston.createLogger({
@@ -105,12 +105,13 @@ const fs = require('fs');
 const vars = JSON.parse(fs.readFileSync('./.vars.json', 'utf8'));
 
 const BOT_TOKEN = vars.BOT_TOKEN;
-const port = vars.PORT || 6969;
+const port = vars.PORT || 50123;
 const ADMIN = vars.USER_ID; 
 const NAMA_STORE = vars.NAMA_STORE || '@Kizaru07';
 const DATA_QRIS = vars.DATA_QRIS;
-const MERCHANT_ID = vars.MERCHANT_ID;
-const API_KEY = vars.API_KEY;
+const PAKASIR_APIKEY = vars.PAKASIR_APIKEY;
+const PAKASIR_PAYMENT_CODE = vars.PAKASIR_PAYMENT_CODE;
+const PAKASIR_PROJECT = vars.PAKASIR_PROJECT;
 const GROUP_ID = vars.GROUP_ID;
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -1257,7 +1258,7 @@ bot.action('service_trial', async (ctx) => {
 
     await ctx.reply(
       `📩 <b>Silakan chat admin untuk request Trial</b>\n\n` +
-      `👤 Admin: <a href="https://t.me/Kizaru07">@KIZARU_STORE</a>\n` +
+      `👤 Admin: <a href="https://t.me/ARI_VPN_STORE">@ARI_VPN_STORE</a>\n` +
       `💬 Kirim pesan: "Minta Trial UDP ZIVPN bang"`,
       { parse_mode: "HTML" }
     );
@@ -2788,30 +2789,28 @@ bot.action('nama_server_edit', async (ctx) => {
 
 bot.action('topup_saldo', async (ctx) => {
   try {
-    await ctx.answerCbQuery(); 
+    await ctx.answerCbQuery();
+    // console.log(ctx.from);
     const userId = ctx.from.id;
-    logger.info(`🔍 User ${userId} memulai proses top-up saldo.`);
-    
+    console.log(`🔍 ${ctx.first_name} ( ${userId} ) : Memulai deposit saldo.`);
 
+    // Inisialisasi state jika belum ada
     if (!global.depositState) {
       global.depositState = {};
     }
     global.depositState[userId] = { action: 'request_amount', amount: '' };
-    
-    logger.info(`🔍 User ${userId} diminta untuk memasukkan jumlah nominal saldo.`);
-    
 
+    // Tampilkan keyboard numerik
     const keyboard = keyboard_nomor();
-    
-    await ctx.editMessageText('💰 *Silakan masukkan jumlah nominal saldo yang Anda ingin tambahkan ke akun Anda:*', {
+    await ctx.reply('*jumlah nominal saldo [Minimal 5000]:*', {
       reply_markup: {
-        inline_keyboard: keyboard
+        inline_keyboard: keyboard,
       },
-      parse_mode: 'Markdown'
+      parse_mode: 'Markdown',
     });
   } catch (error) {
-    logger.error('❌ Kesalahan saat memulai proses top-up saldo:', error);
-    await ctx.editMessageText('❌ *GAGAL! Terjadi kesalahan saat memproses permintaan Anda. Silakan coba lagi nanti.*', { parse_mode: 'Markdown' });
+    console.error('🚫 Kesalahan saat memulai proses top-up saldo:', error);
+    await ctx.reply('🚫 Gagal memulai proses top-up. Silakan coba lagi nanti.', { parse_mode: 'Markdown' });
   }
 });
 
@@ -3258,91 +3257,59 @@ function generateRandomNumber(min, max) {
 
 async function processDeposit(ctx, amount) {
   const currentTime = Date.now();
-
   if (currentTime - lastRequestTime < requestInterval) {
-    await ctx.editMessageText('⚠️ *Terlalu banyak permintaan. Silakan tunggu sebentar sebelum mencoba lagi.*', { parse_mode: 'Markdown' });
+    await ctx.editMessageText('⚠️ *Terlalu banyak permintaan. Silakan tunggu sebentar.*', { parse_mode: 'Markdown' });
     return;
   }
 
   lastRequestTime = currentTime;
   const userId = ctx.from.id;
-  const uniqueCode = `user-${userId}-${Date.now()}`;
+  const reference = `TOPUP-${userId}-${Date.now()}`;
 
-  // Generate final amount with random suffix
-  const finalAmount = Number(amount) + generateRandomNumber(1, 300);
-  const adminFee = finalAmount - Number(amount)
   try {
-    const urlQr = DATA_QRIS; // QR destination
-   // console.log('🔍 CEK DATA_QRIS:', urlQr);
-    const axios = require('axios');
-//const sharp = require('sharp'); // opsional kalau mau resize
+    // 1. Buat Pembayaran di Pakasir
+    const payment = await makePayment(reference, amount);
 
-const bayar = await axios.get(`https://api.rajaserverpremium.web.id/orderkuota/createpayment?apikey=AriApiPaymetGetwayMod&amount=${finalAmount}&codeqr=${urlQr}`);
-const get = bayar.data;
+    if (payment && payment.data) {
+      // 2. Buat Gambar QR dari string QR Pakasir
+      const qrImage = await createImageQR(payment.data.qr_string);
 
-if (get.status !== 'success') {
-  throw new Error('Gagal membuat QRIS: ' + JSON.stringify(get));
-}
+      const caption =
+        `📝 *DETAIL PEMBAYARAN PAKASIR*\n\n` +
+        `👤 User ID: \`${userId}\`\n` +
+        `💰 Nominal: *Rp ${amount}*\n` +
+        `🆔 Ref: \`${reference}\`\n\n` +
+        `⚠️ *Catatan:*\n` +
+        `- Silakan scan QRIS di atas\n` +
+        `- Klik tombol **CEK PEMBAYARAN** setelah transfer berhasil`;
 
-const qrImageUrl = get.result.imageqris?.url;
+      const qrMessage = await ctx.replyWithPhoto({ source: qrImage }, {
+        caption: caption,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ CEK PEMBAYARAN', callback_data: `cekpay_${reference}_${amount}` }],
+            [{ text: '❌ Batalkan', callback_data: 'send_main_menu' }]
+          ]
+        }
+      });
 
-if (!qrImageUrl || qrImageUrl.includes('undefined')) {
-  throw new Error('URL QRIS tidak valid: ' + qrImageUrl);
-}
+      // Hapus pesan input sebelumnya
+      try { await ctx.deleteMessage(); } catch (e) {}
 
-// Download gambar QR
-const qrResponse = await axios.get(qrImageUrl, { responseType: 'arraybuffer' });
-const qrBuffer = Buffer.from(qrResponse.data);
+      // Simpan ke database lokal untuk record
+      db.run(
+        `INSERT INTO pending_deposits (unique_code, user_id, amount, original_amount, timestamp, status, qr_message_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [reference, userId, amount, amount, Date.now(), 'pending', qrMessage.message_id]
+      );
 
-    const caption =
-      `📝 *Detail Pembayaran:*\n\n` +
-                  `💰 Jumlah: Rp ${finalAmount}\n` +
-      `- Nominal Top Up: Rp ${amount}\n` +
-      `- Admin Fee : Rp ${adminFee}\n` +
-                  `⚠️ *Penting:* Mohon transfer sesuai nominal\n` +
-      `⏱️ Waktu: 5 menit\n\n` +
-                  `⚠️ *Catatan:*\n` +
-                  `- Pembayaran akan otomatis terverifikasi\n` +
-      `- Jika pembayaran berhasil, saldo akan otomatis ditambahkan`;
-
-    const qrMessage = await ctx.replyWithPhoto({ source: qrBuffer }, {
-      caption: caption,
-          parse_mode: 'Markdown'
-        }); 
-    // Hapus pesan input nominal setelah QR code dikirim
-    try {
-      await ctx.deleteMessage();
-    } catch (e) {
-      logger.error('Gagal menghapus pesan input nominal:', e.message);
+    } else {
+      throw new Error('Gagal mendapatkan data dari Pakasir');
     }
-
-        global.pendingDeposits[uniqueCode] = {
-          amount: finalAmount,
-          originalAmount: amount,
-          userId,
-          timestamp: Date.now(),
-      status: 'pending',
-      qrMessageId: qrMessage.message_id
-    };
-
-    db.run(
-      `INSERT INTO pending_deposits (unique_code, user_id, amount, original_amount, timestamp, status, qr_message_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [uniqueCode, userId, finalAmount, amount, Date.now(), 'pending', qrMessage.message_id],
-      (err) => {
-        if (err) logger.error('Gagal insert pending_deposits:', err.message);
-      }
-    );
-        delete global.depositState[userId];
-
   } catch (error) {
-    logger.error('❌ Kesalahan saat memproses deposit:', error);
-    await ctx.editMessageText('❌ *GAGAL! Terjadi kesalahan saat memproses pembayaran. Silakan coba lagi nanti.*', { parse_mode: 'Markdown' });
-    delete global.depositState[userId];
-    delete global.pendingDeposits[uniqueCode];
-    db.run('DELETE FROM pending_deposits WHERE unique_code = ?', [uniqueCode], (err) => {
-      if (err) logger.error('Gagal hapus pending_deposits (error):', err.message);
-    });
+    logger.error('❌ Kesalahan Pakasir:', error);
+    await ctx.reply('❌ *Gagal membuat QRIS Pakasir. Silakan coba lagi nanti.*', { parse_mode: 'Markdown' });
   }
 }
 
@@ -3658,6 +3625,41 @@ async function recordAccountTransaction(userId, type) {
     );
   });
 }
+
+bot.action(/cekpay_(.*)_(.*)/, async (ctx) => {
+  const reference = ctx.match[1];
+  const amount = parseInt(ctx.match[2]);
+  const userId = ctx.from.id;
+
+  try {
+    // Cek status ke API Pakasir
+    const status = await cekPayment(reference, amount);
+
+    if (status && status.transaction && status.transaction.status === "completed") {
+      // 1. Update Saldo di Database
+      db.run("UPDATE users SET saldo = saldo + ? WHERE user_id = ?", [amount, userId], async (err) => {
+        if (!err) {
+          // 2. Beri notifikasi sukses ke user
+          await ctx.editMessageCaption(`✅ *PEMBAYARAN BERHASIL!*\n\nSaldo sebesar *Rp ${amount}* telah ditambahkan ke akun Anda.`, { parse_mode: 'Markdown' });
+          
+          // 3. Notifikasi ke grup admin
+          try {
+            await bot.telegram.sendMessage(GROUP_ID, `✅ *Top Up Berhasil (Pakasir)*\n👤 User: \`${userId}\`\n💰 Nominal: *Rp ${amount}*`);
+          } catch (e) {}
+          
+          // 4. Bersihkan dari database pending
+          db.run('DELETE FROM pending_deposits WHERE unique_code = ?', [reference]);
+        }
+      });
+    } else {
+      // Jika pembayaran belum masuk
+      await ctx.answerCbQuery('❌ Pembayaran belum terdeteksi. Silakan transfer terlebih dahulu atau tunggu 1-2 menit.', { show_alert: true });
+    }
+  } catch (error) {
+    logger.error('Cek Payment Error:', error);
+    await ctx.answerCbQuery('⚠️ Terjadi kesalahan saat menghubungi server pembayaran.', { show_alert: true });
+  }
+});
 
 app.listen(port, () => {
   bot.launch().then(() => {
