@@ -108,7 +108,6 @@ const BOT_TOKEN = vars.BOT_TOKEN;
 const port = vars.PORT || 50123;
 const ADMIN = vars.USER_ID; 
 const NAMA_STORE = vars.NAMA_STORE || '@Kizaru07';
-const DATA_QRIS = vars.DATA_QRIS;
 const PAKASIR_APIKEY = vars.PAKASIR_APIKEY;
 const PAKASIR_PAYMENT_CODE = vars.PAKASIR_PAYMENT_CODE;
 const PAKASIR_PROJECT = vars.PAKASIR_PROJECT;
