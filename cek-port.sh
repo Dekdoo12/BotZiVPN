@@ -1,46 +1,34 @@
 #!/bin/bash
 
-# Daftar server (ubah sesuai kebutuhan)
-servers=(
-  "biznet.rajaserverpremium.web.id"
+# URUTAN TAMPILAN (ini yang menentukan urutan)
+server_order=(
+  "ID-BIZNET-1"
 )
 
-# Daftar port + label
-declare -A ports
-ports=(
+# Alias => domain (domain tidak ditampilkan)
+declare -A servers=(
+  ["ID-BIZNET-1"]="zivpn.supercepat.biz.id"
+)
+
+# Port + label
+declare -A ports=(
   [22]="VPS LOGIN"
 )
 
-# Warna
-green="\e[32m"
-red="\e[31m"
-nc="\e[0m"
+green="\e[32m"; red="\e[31m"; nc="\e[0m"
 
 echo "🔍 Cek status server"
 echo "-------------------------------------------"
 
-# Loop setiap server
-for server in "${servers[@]}"; do
-  echo -e "\n🌐 Server: $server"
+for alias in "${server_order[@]}"; do
+  host="${servers[$alias]}"
+  echo -e "\n🌐 Server: $alias"
 
-  # Jika nama server mengandung "udp-" hanya cek port 22
-  if [[ "$server" == *"udp-"* ]]; then
-    port=22
-    timeout 2 bash -c "</dev/tcp/$server/$port" &>/dev/null
-    if [[ $? -eq 0 ]]; then
-      echo -e "  Port $port (${ports[$port]}): ${green}OPEN${nc}"
-    else
-      echo -e "  Port $port (${ports[$port]}): ${red}CLOSED${nc}"
-    fi
+  port=22
+  timeout 2 bash -c "</dev/tcp/$host/$port" &>/dev/null
+  if [[ $? -eq 0 ]]; then
+    echo -e "  Port $port (${ports[$port]}): ${green}OPEN${nc}"
   else
-    # Cek semua port untuk server SSL
-    for port in "${!ports[@]}"; do
-      timeout 2 bash -c "</dev/tcp/$server/$port" &>/dev/null
-      if [[ $? -eq 0 ]]; then
-        echo -e "  Port $port (${ports[$port]}): ${green}OPEN${nc}"
-      else
-        echo -e "  Port $port (${ports[$port]}): ${red}CLOSED${nc}"
-      fi
-    done
+    echo -e "  Port $port (${ports[$port]}): ${red}CLOSED${nc}"
   fi
 done
