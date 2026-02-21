@@ -3523,7 +3523,7 @@ async function processDeposit(ctx, amount) {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: 'konfirmasi pembayaran', callback_data: `cekpay_${uniqueCode}_${parseInt(amount)}` }
+          { text: 'Konfirmasi Pembayaran', callback_data: `cekpay_${uniqueCode}_${parseInt(amount)}` }
         ]
       ]
     }
