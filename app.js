@@ -3515,7 +3515,7 @@ async function processDeposit(ctx, amount) {
       `- Nominal Top Up: Rp ${amount}\n` +
       `- Admin Fee : Rp ${adminFee}\n` +
     `⚠️ *Penting:* Mohon transfer sesuai nominal\n` +
-    `⏱️ Waktu: 5 menit\n\n` +
+    `⏱️ Waktu: 60 menit\n\n` +
       `⚠️ *Catatan:*\n` +
       `- Mohon klik konfirmasi pembayaran, setelah membayar\n` +
       `- Jika pembayaran berhasil, saldo akan otomatis ditambahkan`,
