@@ -3,11 +3,17 @@
 # URUTAN TAMPILAN (ini yang menentukan urutan)
 server_order=(
   "ID-BIZNET-1"
+  "ID-BIZNET-2"
+  "ID-BIZNET-3"
+  "SG-NEWMEDIA"
 )
 
 # Alias => domain (domain tidak ditampilkan)
 declare -A servers=(
   ["ID-BIZNET-1"]="zivpn.supercepat.biz.id"
+  ["ID-BIZNET-2"]="103.197.190.193"
+  ["ID-BIZNET-3"]="biznet2.supercepat.biz.id"
+  ["SG-NEWMEDIA"]="newmedia.supercepat.biz.id"
 )
 
 # Port + label
