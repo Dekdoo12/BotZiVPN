@@ -520,148 +520,139 @@ Gunakan perintah ini dengan format yang benar untuk menghindari kesalahan.
 bot.command('broadcast', async (ctx) => {
   const userId = ctx.message.from.id;
   if (!adminIds.includes(userId)) {
-      return ctx.reply('⛔ Anda tidak punya izin.');
+    return ctx.reply('⛔ Anda tidak punya izin.');
   }
 
-  const msg = ctx.message.reply_to_message 
-      ? ctx.message.reply_to_message.text 
-      : ctx.message.text.split(' ').slice(1).join(' ');
+  const msg = ctx.message.reply_to_message
+    ? ctx.message.reply_to_message.text
+    : ctx.message.text.split(' ').slice(1).join(' ');
 
-  if (!msg) {
-      return ctx.reply('⚠️ Harap isi pesan broadcast.');
+  if (!msg) return ctx.reply('⚠️ Harap isi pesan broadcast.');
+
+  ctx.reply('📢 Broadcast dimulai...');
+
+  db.all("SELECT user_id FROM users", [], async (err, rows) => {
+    if (err) return ctx.reply('⚠️ Error ambil data user.');
+
+    let sukses = 0;
+    let gagal = 0;
+    let invalid = 0;
+
+    const delay = 30; // ms
+
+    for (const row of rows) {
+      try {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          chat_id: row.user_id,
+          text: msg
+        });
+
+        sukses++;
+      } catch (error) {
+        const code = error.response?.status;
+        gagal++;
+
+        // TIDAK MENGHAPUS USER
+        if (code === 400 || code === 403) {
+          invalid++;
+          console.log(`🚫 User invalid (tidak dihapus): ${row.user_id}`);
+        }
+
+        console.log(`❌ Gagal kirim ke ${row.user_id}: ${code}`);
+      }
+
+      await new Promise(r => setTimeout(r, delay));
+    }
+
+    ctx.reply(
+      `📣 *Broadcast selesai!*\n\n` +
+      `✔️ Berhasil: *${sukses}*\n` +
+      `❌ Gagal: *${gagal}*\n` +
+      `🚫 Invalid/Blocked: *${invalid}*`,
+      { parse_mode: 'Markdown' }
+    );
+  });
+});
+
+bot.command('broadcastfoto', async (ctx) => {
+  const userId = ctx.message.from.id;
+  if (!adminIds.includes(userId)) {
+    return ctx.reply('⛔ Anda tidak punya izin.');
+  }
+
+  const replyMsg = ctx.message.reply_to_message;
+
+  let isPhoto = false;
+  let msgText = '';
+  let photoFileId = '';
+
+  if (replyMsg) {
+    if (replyMsg.photo) {
+      isPhoto = true;
+      photoFileId = replyMsg.photo[replyMsg.photo.length - 1].file_id;
+      msgText = replyMsg.caption || '';
+    } else if (replyMsg.text) {
+      msgText = replyMsg.text;
+    }
+  } else {
+    msgText = ctx.message.text.split(' ').slice(1).join(' ');
+  }
+
+  if (!msgText && !photoFileId) {
+    return ctx.reply('⚠️ Harap isi pesan broadcast atau reply foto.');
   }
 
   ctx.reply('📢 Broadcast dimulai...');
 
   db.all("SELECT user_id FROM users", [], async (err, rows) => {
-      if (err) return ctx.reply('⚠️ Error ambil data user.');
+    if (err) return ctx.reply('⚠️ Error ambil data user.');
 
-      let sukses = 0;
-      let gagal = 0;
-      let dihapus = 0;
+    let sukses = 0;
+    let gagal = 0;
+    let invalid = 0;
 
-      const delay = 30; // aman biar ga kena limit (30 ms)
+    const delay = 30; // ms
 
-      for (const row of rows) {
-          try {
-              await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                  chat_id: row.user_id,
-                  text: msg
-              });
+    for (const row of rows) {
+      try {
+        if (isPhoto) {
+          await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+            chat_id: row.user_id,
+            photo: photoFileId,
+            caption: msgText
+          });
+        } else {
+          await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            chat_id: row.user_id,
+            text: msgText
+          });
+        }
 
-              sukses++;
+        sukses++;
+      } catch (error) {
+        const code = error.response?.status;
+        gagal++;
 
-          } catch (error) {
-              const code = error.response?.status;
+        // TIDAK MENGHAPUS USER
+        if (code === 400 || code === 403) {
+          invalid++;
+          console.log(`🚫 User invalid (tidak dihapus): ${row.user_id}`);
+        }
 
-              gagal++;
-
-              // AUTO DELETE USER MATI
-              if (code === 400 || code === 403) {
-                  db.run("DELETE FROM users WHERE user_id = ?", [row.user_id]);
-                  dihapus++;
-                  console.log(`🗑️ User invalid dihapus: ${row.user_id}`);
-              }
-
-              console.log(`❌ Gagal kirim ke ${row.user_id}: ${code}`);
-          }
-
-          // Anti limit Telegram
-          await new Promise(r => setTimeout(r, delay));
+        console.log(`❌ Gagal kirim ke ${row.user_id}: ${code}`);
       }
 
-      ctx.reply(
-          `📣 *Broadcast selesai!*\n\n` +
-          `✔️ Berhasil: *${sukses}*\n` +
-          `❌ Gagal: *${gagal}*\n` +
-          `🗑️ User dihapus: *${dihapus}*`,
-          { parse_mode: 'Markdown' }
-      );
+      await new Promise(r => setTimeout(r, delay));
+    }
+
+    ctx.reply(
+      `📣 *Broadcast selesai!*\n\n` +
+      `✔️ Berhasil: *${sukses}*\n` +
+      `❌ Gagal: *${gagal}*\n` +
+      `🚫 Invalid/Blocked: *${invalid}*`,
+      { parse_mode: 'Markdown' }
+    );
   });
-});
-
-bot.command('broadcastfoto', async (ctx) => {
-    const userId = ctx.message.from.id;
-    if (!adminIds.includes(userId)) {
-        return ctx.reply('⛔ Anda tidak punya izin.');
-    }
-
-    const replyMsg = ctx.message.reply_to_message;
-
-    // Cek apakah broadcast foto atau teks
-    let isPhoto = false;
-    let msgText = '';
-    let photoFileId = '';
-
-    if (replyMsg) {
-        if (replyMsg.photo) {
-            isPhoto = true;
-            // Ambil versi terbesar foto
-            photoFileId = replyMsg.photo[replyMsg.photo.length - 1].file_id;
-            msgText = replyMsg.caption || '';
-        } else if (replyMsg.text) {
-            msgText = replyMsg.text;
-        }
-    } else {
-        msgText = ctx.message.text.split(' ').slice(1).join(' ');
-    }
-
-    if (!msgText && !photoFileId) {
-        return ctx.reply('⚠️ Harap isi pesan broadcast atau reply foto.');
-    }
-
-    ctx.reply('📢 Broadcast dimulai...');
-
-    db.all("SELECT user_id FROM users", [], async (err, rows) => {
-        if (err) return ctx.reply('⚠️ Error ambil data user.');
-
-        let sukses = 0;
-        let gagal = 0;
-        let dihapus = 0;
-
-        const delay = 30; // ms
-
-        for (const row of rows) {
-            try {
-                if (isPhoto) {
-                    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
-                        chat_id: row.user_id,
-                        photo: photoFileId,
-                        caption: msgText
-                    });
-                } else {
-                    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                        chat_id: row.user_id,
-                        text: msgText
-                    });
-                }
-
-                sukses++;
-
-            } catch (error) {
-                const code = error.response?.status;
-                gagal++;
-
-                if (code === 400 || code === 403) {
-                    db.run("DELETE FROM users WHERE user_id = ?", [row.user_id]);
-                    dihapus++;
-                    console.log(`🗑️ User invalid dihapus: ${row.user_id}`);
-                }
-
-                console.log(`❌ Gagal kirim ke ${row.user_id}: ${code}`);
-            }
-
-            await new Promise(r => setTimeout(r, delay));
-        }
-
-        ctx.reply(
-            `📣 *Broadcast selesai!*\n\n` +
-            `✔️ Berhasil: *${sukses}*\n` +
-            `❌ Gagal: *${gagal}*\n` +
-            `🗑️ User dihapus: *${dihapus}*`,
-            { parse_mode: 'Markdown' }
-        );
-    });
 });
 
 bot.command('addsaldo', async (ctx) => {
