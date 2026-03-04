@@ -3002,158 +3002,223 @@ bot.on('callback_query', async (ctx) => {
 
 
   // Hanya proses tombol cekpay
-  if (data.startsWith('cekpay_')) {
-    const cutx      = data.split('_');
-    const reference = cutx[1]
-    const amount    = cutx[2];
-    const cekPayments = await cekPayment(reference, amount);
-    const chatId      = ctx.chat.id;
-    const userId      = ctx.from.id;
-    const stateini    = global.pendingDeposits[reference];
-    /**
-     * { amount: 1317, originalAmount: 1000, userId: 1248554663, timestamp: 1766674062860, status: 'pending', qrMessageId: 1785 }
-     */
-    
-    console.log(`User checkPayment : ${reference} - Amount: ${amount}`);  
-    
+if (data.startsWith('cekpay_')) {
+  // Parsing lebih aman: cekpay_<reference>_<amount>
+  const payload = data.slice('cekpay_'.length);
+  const lastUnderscore = payload.lastIndexOf('_');
+  const reference = lastUnderscore !== -1 ? payload.slice(0, lastUnderscore) : payload;
+  const amount = lastUnderscore !== -1 ? payload.slice(lastUnderscore + 1) : '';
 
-    
-    if (cekPayments.transaction.status == "completed"){
+  const chatId = ctx.chat?.id;
+  const userId = ctx.from?.id;
 
-  // Use a database transaction to ensure atomicity
-  return new Promise((resolve, reject) => {
-    db.serialize(() => {
-      db.run('BEGIN TRANSACTION');
-      // First check if transaction was already processed
-      db.get('SELECT id FROM transactions WHERE reference_id = ? AND amount = ?', 
-        [reference, stateini.originalAmount], 
-        (err, row) => {
-          if (err) {
-            db.run('ROLLBACK');
-            logger.error('Error checking transaction:', err);
-            reject(err);
-            return;
-          }
-          if (row) {
-            db.run('ROLLBACK');
-            logger.info(`Transaction ${reference} already processed, skipping...`);
-            resolve(false);
-            return;
-          }
-          // Update user balance
-          db.run('UPDATE users SET saldo = saldo + ? WHERE user_id = ?', 
-            [stateini.originalAmount, stateini.userId], 
-            function(err) {
-              if (err) {
-                db.run('ROLLBACK');
-                logger.error('Error updating balance:', err);
-                reject(err);
-                return;
-              }
-    // Record the transaction
-      db.run(
-                'INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
-                [stateini.userId, stateini.originalAmount, 'deposit', reference, Date.now()],
-        (err) => {
-                  if (err) {
-                    db.run('ROLLBACK');
-                    logger.error('Error recording transaction:', err);
-                    reject(err);
-                    return;
-                  }
-                  // Get updated balance
-                  db.get('SELECT saldo FROM users WHERE user_id = ?', [stateini.userId], async (err, user) => {
+  const stateini = global.pendingDeposits?.[reference];
+
+  // Kalau pending deposit sudah hilang/expired (misal bot restart), jangan lanjut biar gak crash
+  if (!stateini) {
+    try {
+      await ctx.answerCbQuery('Data deposit tidak ditemukan / sudah expired. Silakan buat QR ulang.', { show_alert: true });
+    } catch (_) {}
+    return;
+  }
+
+  // Siapkan Set untuk anti double-klik
+  if (!global.processedTransactions) global.processedTransactions = new Set();
+
+  // FIX: transactionKey sebelumnya tidak ada -> sekarang dibuat
+  const transactionKey = `${reference}_${stateini.userId}_${stateini.originalAmount}`;
+
+  // Anti double klik (in-memory)
+  if (global.processedTransactions.has(transactionKey)) {
+    try {
+      await ctx.answerCbQuery('Transaksi ini sudah diproses.', { show_alert: false });
+    } catch (_) {}
+    return;
+  }
+
+  console.log(`User checkPayment : ${reference} - Amount: ${amount}`);
+
+  let cekPayments;
+  try {
+    cekPayments = await cekPayment(reference, amount);
+  } catch (e) {
+    logger.error('cekPayment error:', e.message);
+    try {
+      await ctx.answerCbQuery('Gagal cek pembayaran. Coba lagi.', { show_alert: true });
+    } catch (_) {}
+    return;
+  }
+
+  // Pastikan response aman
+  if (!cekPayments || !cekPayments.transaction || !cekPayments.transaction.status) {
+    logger.error('cekPayment response invalid:', JSON.stringify(cekPayments));
+    try {
+      await ctx.answerCbQuery('Response pembayaran tidak valid. Coba lagi.', { show_alert: true });
+    } catch (_) {}
+    return;
+  }
+
+  if (cekPayments.transaction.status === 'completed') {
+    // Use a database transaction to ensure atomicity
+    return new Promise((resolve, reject) => {
+      db.serialize(() => {
+        db.run('BEGIN TRANSACTION');
+
+        // First check if transaction was already processed (DB anti double process)
+        db.get(
+          'SELECT id FROM transactions WHERE reference_id = ? AND amount = ?',
+          [reference, stateini.originalAmount],
+          (err, row) => {
+            if (err) {
+              db.run('ROLLBACK');
+              logger.error('Error checking transaction:', err);
+              reject(err);
+              return;
+            }
+
+            if (row) {
+              db.run('ROLLBACK');
+              logger.info(`Transaction ${reference} already processed, skipping...`);
+              resolve(false);
+              return;
+            }
+
+            // Update user balance
+            db.run(
+              'UPDATE users SET saldo = saldo + ? WHERE user_id = ?',
+              [stateini.originalAmount, stateini.userId],
+              function (err) {
+                if (err) {
+                  db.run('ROLLBACK');
+                  logger.error('Error updating balance:', err);
+                  reject(err);
+                  return;
+                }
+
+                // Record the transaction
+                db.run(
+                  'INSERT INTO transactions (user_id, amount, type, reference_id, timestamp) VALUES (?, ?, ?, ?, ?)',
+                  [stateini.userId, stateini.originalAmount, 'deposit', reference, Date.now()],
+                  (err) => {
                     if (err) {
                       db.run('ROLLBACK');
-                      logger.error('Error getting updated balance:', err);
+                      logger.error('Error recording transaction:', err);
                       reject(err);
                       return;
                     }
-                    // Send notification using sendPaymentSuccessNotification
-    const notificationSent = await sendPaymentSuccessNotification(
-      stateini.userId,
-      stateini,
-                      user.saldo
-                    );
-                    // Delete QR code message after payment success
-                    if (stateini.qrMessageId) {
-                      try {
-                        await bot.telegram.deleteMessage(stateini.userId, stateini.qrMessageId);
-                      } catch (e) {
-                        logger.error("Gagal menghapus pesan QR code:", e.message);
-                      }
-                    }
-    if (notificationSent) {
-      // Notifikasi ke grup untuk top up
-      try {
-        // Pada notifikasi ke grup (top up dan pembelian/renew), ambil info user:
-        let userInfo;
-        try {
-          userInfo = await bot.telegram.getChat(stateini ? stateini.userId : (ctx ? ctx.from.id : ''));
-        } catch (e) {
-          userInfo = {};
-        }
-        const username = userInfo.username ? `@${userInfo.username}` : (userInfo.first_name || (deposit ? deposit.userId : (ctx ? ctx.from.id : '')));
-        const userDisplay = userInfo.username
-          ? `${username} (${deposit ? deposit.userId : (ctx ? ctx.from.id : '')})`
-          : `${username}`;
-        await bot.telegram.sendMessage(
-          GROUP_ID,
-          `<blockquote>
+
+                    // Get updated balance
+                    db.get(
+                      'SELECT saldo FROM users WHERE user_id = ?',
+                      [stateini.userId],
+                      async (err, user) => {
+                        if (err) {
+                          db.run('ROLLBACK');
+                          logger.error('Error getting updated balance:', err);
+                          reject(err);
+                          return;
+                        }
+
+                        // Send notification using sendPaymentSuccessNotification
+                        let notificationSent = false;
+                        try {
+                          notificationSent = await sendPaymentSuccessNotification(
+                            stateini.userId,
+                            stateini,
+                            user.saldo
+                          );
+                        } catch (e) {
+                          logger.error('sendPaymentSuccessNotification error:', e.message);
+                          notificationSent = false;
+                        }
+
+                        // Delete QR code message after payment success
+                        if (stateini.qrMessageId) {
+                          try {
+                            await bot.telegram.deleteMessage(stateini.userId, stateini.qrMessageId);
+                          } catch (e) {
+                            logger.error('Gagal menghapus pesan QR code:', e.message);
+                          }
+                        }
+
+                        if (notificationSent) {
+                          // Notifikasi ke grup untuk top up
+                          try {
+                            let userInfo;
+                            try {
+                              userInfo = await bot.telegram.getChat(stateini.userId);
+                            } catch (e) {
+                              userInfo = {};
+                            }
+
+                            const username = userInfo.username
+                              ? `@${userInfo.username}`
+                              : (userInfo.first_name || `${stateini.userId}`);
+
+                            const userDisplay = userInfo.username
+                              ? `${username} (${stateini.userId})`
+                              : `${username}`;
+
+                            await bot.telegram.sendMessage(
+                              GROUP_ID,
+                              `<blockquote>
 ✅ <b>Top Up Berhasil</b>
 👤 User: ${userDisplay}
 💰 Nominal: <b>Rp ${stateini.originalAmount}</b>
 🏦 Saldo Sekarang: <b>Rp ${user.saldo}</b>
 🕒 Waktu: ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
 </blockquote>`,
-          { parse_mode: 'HTML' }
-        );
-      } catch (e) { logger.error('Gagal kirim notif top up ke grup:', e.message); }
-      // Hapus semua file di receipts setelah pembayaran sukses
-      try {
-        const receiptsDir = path.join(__dirname, 'receipts');
-        if (fs.existsSync(receiptsDir)) {
-          const files = fs.readdirSync(receiptsDir);
-          for (const file of files) {
-            fs.unlinkSync(path.join(receiptsDir, file));
+                              { parse_mode: 'HTML' }
+                            );
+                          } catch (e) {
+                            logger.error('Gagal kirim notif top up ke grup:', e.message);
+                          }
+
+                          // Hapus semua file di receipts setelah pembayaran sukses
+                          try {
+                            const receiptsDir = path.join(__dirname, 'receipts');
+                            if (fs.existsSync(receiptsDir)) {
+                              const files = fs.readdirSync(receiptsDir);
+                              for (const file of files) {
+                                fs.unlinkSync(path.join(receiptsDir, file));
+                              }
+                            }
+                          } catch (e) {
+                            logger.error('Gagal menghapus file di receipts:', e.message);
+                          }
+
+                          db.run('COMMIT');
+
+                          // Tandai sudah diproses (in-memory)
+                          global.processedTransactions.add(transactionKey);
+
+                          // Hapus pending deposit
+                          if (global.pendingDeposits) delete global.pendingDeposits[reference];
+                          db.run('DELETE FROM pending_deposits WHERE unique_code = ?', [reference]);
+
+                          resolve(true);
+                        } else {
+                          db.run('ROLLBACK');
+                          reject(new Error('Failed to send payment notification.'));
+                        }
+                      }
+                    );
+                  }
+                );
+              }
+            );
           }
-        }
-      } catch (e) { logger.error('Gagal menghapus file di receipts:', e.message); }
-      db.run('COMMIT');
-      global.processedTransactions.add(transactionKey);
-      delete global.pendingDeposits[reference];
-      db.run('DELETE FROM pending_deposits WHERE unique_code = ?', [reference]);
-      resolve(true);
-    } else {
-      db.run('ROLLBACK');
-      reject(new Error('Failed to send payment notification.'));
-    }
-                  });
-                }
-              );
-            }
-          );
-        }
-      );
+        );
+      });
     });
-  });
-
-
-      
-    } else {
-       await ctx.answerCbQuery('Belum ada pembayaran ditemukan', { show_alert: true });
-    }
-
-
-
-
-    
-
-
-
-    // Sudah diproses, hentikan handler lain (opsional)
+  } else {
+    // status belum completed
+    try {
+      await ctx.answerCbQuery('Pembayaran tidak di temukan.', { show_alert: true });
+    } catch (_) {}
     return;
   }
+}
 
 
 
@@ -3564,7 +3629,7 @@ async function processDeposit(ctx, amount) {
       `- Nominal Top Up: Rp ${amount}\n` +
       `- Admin Fee : Rp ${adminFee}\n` +
     `⚠️ *Penting:* Mohon transfer sesuai nominal\n` +
-    `⏱️ Waktu: 5 menit\n\n` +
+    `⏱️ Waktu: 60 menit\n\n` +
       `⚠️ *Catatan:*\n` +
       `- Mohon klik konfirmasi pembayaran, setelah membayar\n` +
       `- Jika pembayaran berhasil, saldo akan otomatis ditambahkan`,
@@ -3572,7 +3637,7 @@ async function processDeposit(ctx, amount) {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: 'Confirm Payment', callback_data: `cekpay_${uniqueCode}_${parseInt(amount)}` }
+          { text: 'Konfirmasi Pembayaran', callback_data: `cekpay_${uniqueCode}_${parseInt(amount)}` }
         ]
       ]
     }
