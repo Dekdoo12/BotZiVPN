@@ -5,10 +5,10 @@ const db = new sqlite3.Database('./sellzivpn.db');
 async function trialssh(username, password, exp, iplimit, serverId) {
   console.log(`Creating SSH account for ${username} with expiry ${exp} days, IP limit ${iplimit}, and password ${password}`);
 
-  // Validasi username
-if (!/^[a-z0-9-]+$/.test(username)) {
-    return '❌ Username tidak valid. Mohon gunakan hanya huruf dan angka tanpa spasi.';
-  }
+// Validasi username
+if (!/^[a-zA-Z0-9-]+$/.test(username)) {
+  return '❌ Username tidak valid. Gunakan huruf (A–Z / a–z), angka, dan tanda strip (-) tanpa spasi.';
+}
 
   return new Promise((resolve) => {
     db.get('SELECT * FROM Server WHERE id = ?', [serverId], (err, server) => {
@@ -21,26 +21,60 @@ if (!/^[a-z0-9-]+$/.test(username)) {
     const AUTH_TOKEN = server.auth;
 
     // Endpoint trial
-    const curlCommand = `curl "http://${domain}:5888/trial/zivpn?exp=${exp}&auth=${AUTH_TOKEN}"`;
+    const curlCommand = `curl --fail --connect-timeout 1 --max-time 30 "http://${domain}:5888/trial/zivpn?exp=${exp}&auth=${AUTH_TOKEN}"`;
 
-    exec(curlCommand, (_, stdout) => {
-      let d;
-      try {
-        d = JSON.parse(stdout);
-        console.log("⚠️ FULL DATA:", JSON.stringify(d, null, 2));
-      } catch (e) {
-        console.error('❌ Gagal parsing JSON:', e.message);
-        console.error('🪵 Output:', stdout);
-        return resolve('❌ Format respon dari server tidak valid.');
-      }
+    exec(curlCommand, (err, stdout, stderr) => {
+  if (err) {
+    console.error("❌ Curl error:", err.message);
+    if (stderr) console.error("🪵 stderr:", stderr);
+    return resolve("❌ Gagal menghubungi server.");
+  }
 
-      if (d.status !== "success") {
-        console.error('❌ Respons error:', d);
-        return resolve(`❌ ${d.message}`);
+  const out = (stdout || "").trim();
+  if (!out) {
+    return resolve("❌ Respon server kosong / tidak valid.");
+  }
+
+  // ❌ HARUS JSON
+  let d;
+  try {
+    d = JSON.parse(out);
+  } catch (e) {
+    console.error("❌ JSON parse error:", e.message);
+    console.error("🪵 Output:", out);
+    return resolve("❌ Respon server tidak valid (bukan JSON).");
+  }
+
+  // ❌ schema dasar
+  if (typeof d !== "object" || !("status" in d)) {
+    return resolve("❌ Respon server tidak dikenali.");
+  }
+
+  // ❌ gagal dari backend
+  if (d.status !== "success") {
+    return resolve(`❌ ${d.message || "Permintaan gagal."}`);
+  }
+
+      // UPDATE total create akun (opsional)
+      if (exp >= 1 && exp <= 135) {
+        db.run(
+          'UPDATE Server SET total_create_akun = total_create_akun + 1 WHERE id = ?',
+          [serverId]
+        );
       }
 
       // Pesan untuk Telegram / Bot
-      const msg = `${d.message}`;
+      const msg = `${d.message}
+
+📘 *TUTORIAL PASANG ZIVPN*
+📂 Google Drive:
+https://drive.google.com/file/d/1lNd5l-D8ryZOISGiN3xS13QFxqV6yAR0/view?usp=drivesdk
+
+📌 *Langkah Singkat:*
+1️⃣ Buka link di atas  
+2️⃣ Ikuti panduan di dalam video
+3️⃣ Selesai & Connect 🚀  
+`;
 
         return resolve(msg);
       });
